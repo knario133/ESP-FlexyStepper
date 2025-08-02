@@ -1,10 +1,10 @@
 
 //      ******************************************************************
 //      *                                                                *
-//      *                    Header file for ESP-FlexyStepper            *
+//      *            Archivo de cabecera para ESP-FlexyStepper            *
 //      *                                                                *
 //      *            Paul Kerspe                     4.6.2020            *
-//      *       based on the concept of FlexyStepper by Stan Reifel      *
+//      *      basado en el concepto de FlexyStepper por Stan Reifel     *
 //      *                                                                *
 //      ******************************************************************
 
@@ -30,7 +30,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// This library is based on the works of Stan Reifel in his FlexyStepper library:
+// Esta biblioteca se basa en los trabajos de Stan Reifel en su biblioteca FlexyStepper:
 // https://github.com/Stan-Reifel/FlexyStepper
 
 #ifndef ESP_FlexyStepper_h
@@ -46,6 +46,8 @@
 
 #include <Arduino.h>
 #include <stdlib.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 typedef void (*callbackFunction)(void);
 typedef void (*positionCallbackFunction)(long);
@@ -55,12 +57,12 @@ class ESP_FlexyStepper
 public:
   ESP_FlexyStepper();
   ~ESP_FlexyStepper();
-  // service functions
+  // funciones de servicio
   bool startAsService(int coreNumber = 1);
   void stopService(void);
   bool isStartedAsService(void);
 
-  // IO setup and helper / debugging functions
+  // funciones de configuración de IO y ayuda / depuración
   void connectToPins(byte stepPinNumber, byte directionPinNumber = 255, bool useOpenDrain = false);
   void setBrakePin(signed char brakePin, byte activeState = ESP_FlexyStepper::ACTIVE_HIGH);
   void setEnablePin(signed char enablePin, byte activeState = ESP_FlexyStepper::ACTIVE_LOW);
@@ -77,17 +79,17 @@ public:
   void enableDriver(void);
   void disableDriver(void);
   bool isDriverEnabled(void);
-  // the central function to calculate the next movment step signal
+  // función central para calcular la señal del siguiente paso
   bool processMovement(void);
 
-  // register function for callbacks
+  // registro de funciones de callback
   void registerHomeReachedCallback(callbackFunction homeReachedCallbackFunction);
   void registerLimitReachedCallback(callbackFunction limitSwitchTriggerdCallbackFunction);
   void registerTargetPositionReachedCallback(positionCallbackFunction targetPositionReachedCallbackFunction);
   void registerEmergencyStopTriggeredCallback(callbackFunction emergencyStopTriggerdCallbackFunction);
   void registerEmergencyStopReleasedCallback(callbackFunction emergencyStopReleasedCallbackFunction);
 
-  // configuration functions
+  // funciones de configuración
   void setStepsPerMillimeter(float motorStepPerMillimeter);
   void setStepsPerRevolution(float motorStepPerRevolution);
   void setSpeedInStepsPerSecond(float speedInStepsPerSecond);
@@ -101,6 +103,8 @@ public:
   void setDecelerationInStepsPerSecondPerSecond(float decelerationInStepsPerSecondPerSecond);
   void setDirectionToHome(signed char directionTowardHome);
   void setLimitSwitchActive(signed char limitSwitchType);
+  void setContinuousVelocityInStepsPerSecond(float velocity);
+  void setAutoDisable(bool enable, unsigned long delayMs);
 
   void setBrakeEngageDelayMs(unsigned long);
   void setBrakeReleaseDelayMs(signed long);
@@ -117,7 +121,7 @@ public:
   float getConfiguredDecelerationInRevolutionsPerSecondPerSecond();
   float getConfiguredDecelerationInMillimetersPerSecondPerSecond();
 
-  // positioning functions
+  // funciones de posicionamiento
   void setCurrentPositionInSteps(long currentPositionInSteps);
   void setCurrentPositionInMillimeters(float currentPositionInMillimeters);
   void setCurrentPositionInRevolutions(float currentPositionInRevolutions);
@@ -146,7 +150,7 @@ public:
   float getTargetPositionInMillimeters();
   float getTargetPositionInRevolutions();
 
-  // blocking function calls
+  // funciones bloqueantes
   void moveToPositionInSteps(long absolutePositionToMoveToInSteps);
   void moveToPositionInMillimeters(float absolutePositionToMoveToInMillimeters);
   void moveToPositionInRevolutions(float absolutePositionToMoveToInRevolutions);
@@ -158,8 +162,8 @@ public:
   bool moveToHomeInMillimeters(signed char directionTowardHome, float speedInMillimetersPerSecond, long maxDistanceToMoveInMillimeters, int homeLimitSwitchPin);
   bool moveToHomeInRevolutions(signed char directionTowardHome, float speedInRevolutionsPerSecond, long maxDistanceToMoveInRevolutions, int homeLimitSwitchPin);
 
-  static const signed char LIMIT_SWITCH_BEGIN = -1;
-  static const signed char LIMIT_SWITCH_END = 1;
+  static const signed char LIMIT_SWITCH_BEGIN = -1;  // interruptor al inicio
+  static const signed char LIMIT_SWITCH_END = 1;     // interruptor al final
   static const signed char LIMIT_SWITCH_COMBINED_BEGIN_AND_END = 2;
   static const byte ACTIVE_HIGH = 1;
   static const byte ACTIVE_LOW = 2;
@@ -213,16 +217,27 @@ private:
   bool holdEmergencyStopUntilExplicitRelease;
   signed char directionTowardsHome;
   signed char lastStepDirectionBeforeLimitSwitchTrigger;
-  // true if the current stepper position equals the homing position
+  // verdadero si la posición actual es igual a la posición de "home"
   bool isCurrentlyHomed;
   bool isOnWayToHome = false;
   bool isOnWayToLimit = false;
   bool firstProcessingAfterTargetReached = false;
-  // The type ID of the limit switch type that is active. possible values are LIMIT_SWITCH_BEGIN (-1) or LIMIT_SWITCH_END (1) or LIMIT_SWITCH_COMBINED_BEGIN_AND_END (2) or 0 if no limit switch is active
+  // Tipo de interruptor de límite activo
   signed char activeLimitSwitch;
   bool limitSwitchCheckPeformed;
-  // 0 if the the stepper is allowed to move in both directions (e.g. no limit or homing switch triggered), otherwise indicated which direction is currently not allowed for further movement
+  // 0 si el motor puede moverse en ambas direcciones, en otro caso indica la dirección prohibida
   signed char disallowedDirection;
+
+  // protección de variables compartidas
+  SemaphoreHandle_t _stateMutex;
+
+  // soporte para movimiento continuo
+  bool _continuousMovement = false;
+
+  // auto desenergizar
+  bool _autoDisable = false;
+  unsigned long _autoDisableDelay = 0;
+  unsigned long _lastActiveTime = 0;
 
   TaskHandle_t xHandle = NULL;
 };

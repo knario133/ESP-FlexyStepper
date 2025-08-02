@@ -2,20 +2,24 @@
 
 [![Codacy Badge](https://api.codacy.com/project/badge/Grade/478b7cf581664442bc75b6a87b645553)](https://app.codacy.com/manual/pkerspe/ESP-FlexyStepper?utm_source=github.com&utm_medium=referral&utm_content=pkerspe/ESP-FlexyStepper&utm_campaign=Badge_Grade_Dashboard)
 
-This library is used to control one or more stepper motors with a ESP 32 module. The motors are accelerated and decelerated as they travel to their destination. The library has been optimized for flexible control where speeds and positions can be changed while in-motion. Based on S.Reifels FlexyStepper library.
+Esta biblioteca permite controlar uno o más motores paso a paso con un módulo ESP32.
+Los motores se aceleran y desaceleran mientras se desplazan a su destino. La
+biblioteca está optimizada para un control flexible donde la velocidad y la
+posición pueden modificarse durante el movimiento. Basada en la biblioteca
+FlexyStepper de S. Reifel.
 
-## Features
+## Características
 
-The library provides the following features:
-  - generating pulses for a connected stepper driver with a direction and step input
-  - connection of emergency switch to stop all motion immediately
-  - connection of limit switches / homing switches
-  - blocking and non blocking function calls possible
-  - callback functions to handle events like position reached, homing complete etc.
-  - can run in different modes:
-    - as a service / task in the background (so you can do whatever you want in the main loop of your sketch without interfering with the stepper motion)
-    - manually call the processMovement() function in the main loop (then you have to make sure your main loop completes quick enough to ensure smooth movement
-    - use the blocking movement functions, that take care of calling processMovement but block the main loop for the duration of the movement
+La biblioteca ofrece las siguientes características:
+  - generación de pulsos para un driver con entradas de paso y dirección
+  - conexión de un botón de emergencia para detener todo movimiento
+  - soporte para finales de carrera / interruptores de homing
+  - funciones bloqueantes y no bloqueantes
+  - callbacks para eventos como posición alcanzada o finalización de homing
+  - puede ejecutarse en diferentes modos:
+    - como servicio/tarea en segundo plano
+    - invocando manualmente `processMovement()` en el bucle principal
+    - mediante funciones bloqueantes que realizan el movimiento completo
 
 ## A view words on jitter in the generated step signals
 
