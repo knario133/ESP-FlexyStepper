@@ -1,2 +1,3 @@
 # ESP-FlexyStepper
-ESP-FlexyStepper CODEX IA OPTIMIZED
+ESP-FlexyStepper de pkerspe
+optimizada con CODEX IA OPTIMIZED
