@@ -4,7 +4,7 @@
 //      *                    ESP-FlexyStepper                            *
 //      *                                                                *
 //      *            Paul Kerspe                     4.6.2020            *
-//      *       based on the concept of FlexyStepper by Stan Reifel      *
+//      *       basado en el concepto de FlexyStepper por Stan Reifel    *
 //      *                                                                *
 //      ******************************************************************
 
@@ -31,13 +31,13 @@
 // SOFTWARE.
 
 //
-// This library is used to control one or more stepper motors.  It requires a
-// stepper driver board that has a Step and Direction interface.  The motors are
-// accelerated and decelerated as they travel to the final position.  This driver
-// supports changing the target position, speed or rate of acceleration while a
-// motion is in progress.
+// Esta biblioteca se usa para controlar uno o más motores paso a paso. Requiere
+// un controlador que ofrezca las señales Step y Direction. Los motores son
+// acelerados y desacelerados mientras viajan a su posición final. El controlador
+// admite cambiar la posición objetivo, la velocidad o la aceleración mientras el
+// movimiento está en curso.
 //
-// for more details and a manual on how to use it, check the README.md on github and the provided examples
+// Para más detalles y un manual de uso consulta el README.md y los ejemplos
 // https://github.com/pkerspe/ESP-FlexyStepper/blob/master/README.md
 //
 // This library is based on the works of Stan Reifel in his FlexyStepper library:
@@ -47,17 +47,17 @@
 #include "ESP_FlexyStepper.h"
 
 //
-// direction signal level for "step and direction"
+// niveles de la señal de dirección para el modo "step and direction"
 //
 #define POSITIVE_DIRECTION LOW
 #define NEGATIVE_DIRECTION HIGH
 
 // ---------------------------------------------------------------------------------
-//                                  Setup functions
+//                                  Funciones de configuración
 // ---------------------------------------------------------------------------------
 
 //
-// constructor for the stepper class
+// constructor de la clase
 //
 ESP_FlexyStepper::ESP_FlexyStepper()
 {
@@ -80,6 +80,7 @@ ESP_FlexyStepper::ESP_FlexyStepper()
   this->activeLimitSwitch = 0; // see LIMIT_SWITCH_BEGIN and LIMIT_SWITCH_END
   this->lastStepDirectionBeforeLimitSwitchTrigger = 0;
   this->limitSwitchCheckPeformed = false;
+  this->_stateMutex = xSemaphoreCreateMutex();
 }
 
 ESP_FlexyStepper::~ESP_FlexyStepper()
@@ -87,6 +88,10 @@ ESP_FlexyStepper::~ESP_FlexyStepper()
   if (this->xHandle != NULL)
   {
     this->stopService();
+  }
+  if (this->_stateMutex != NULL)
+  {
+    vSemaphoreDelete(this->_stateMutex);
   }
 }
 
@@ -165,7 +170,10 @@ long ESP_FlexyStepper::getTaskStackHighWaterMark()
  */
 long ESP_FlexyStepper::getDistanceToTargetSigned()
 {
-  return (this->targetPosition_InSteps - this->currentPosition_InSteps);
+  xSemaphoreTake(_stateMutex, portMAX_DELAY);
+  long dist = (this->targetPosition_InSteps - this->currentPosition_InSteps);
+  xSemaphoreGive(_stateMutex);
+  return dist;
 }
 
 /**
@@ -243,7 +251,10 @@ void ESP_FlexyStepper::clearLimitSwitchActive()
  */
 int ESP_FlexyStepper::getDirectionOfMotion(void)
 {
-  return this->directionOfMotion;
+  xSemaphoreTake(_stateMutex, portMAX_DELAY);
+  int dir = this->directionOfMotion;
+  xSemaphoreGive(_stateMutex);
+  return dir;
 }
 
 /**
@@ -828,7 +839,9 @@ float ESP_FlexyStepper::getCurrentVelocityInRevolutionsPerSecond()
 //
 void ESP_FlexyStepper::setCurrentPositionInSteps(long currentPositionInSteps)
 {
+  xSemaphoreTake(_stateMutex, portMAX_DELAY);
   currentPosition_InSteps = currentPositionInSteps;
+  xSemaphoreGive(_stateMutex);
 }
 
 //
@@ -838,7 +851,10 @@ void ESP_FlexyStepper::setCurrentPositionInSteps(long currentPositionInSteps)
 //
 long ESP_FlexyStepper::getCurrentPositionInSteps()
 {
-  return (currentPosition_InSteps);
+  xSemaphoreTake(_stateMutex, portMAX_DELAY);
+  long pos = currentPosition_InSteps;
+  xSemaphoreGive(_stateMutex);
+  return (pos);
 }
 
 //
@@ -880,11 +896,46 @@ void ESP_FlexyStepper::setDecelerationInStepsPerSecondPerSecond(
   deceleration_InStepsPerUSPerUS = deceleration_InStepsPerSecondPerSecond / 1E12;
 }
 
+//
+// mover el motor de forma continua a una velocidad fija (pasos/segundo)
+// un valor de 0 detiene el movimiento continuo
+//
+void ESP_FlexyStepper::setContinuousVelocityInStepsPerSecond(float velocity)
+{
+  if (velocity == 0.0f)
+  {
+    _continuousMovement = false;
+    setTargetPositionInSteps(getCurrentPositionInSteps());
+  }
+  else
+  {
+    _continuousMovement = true;
+    setSpeedInStepsPerSecond(fabs(velocity));
+    long distance = (velocity > 0 ? 2000000000L : -2000000000L);
+    setTargetPositionRelativeInSteps(distance);
+  }
+}
+
+//
+// configurar desenergización automática del driver
+// enable=true activa la función y delayMs especifica el tiempo de espera
+//
+void ESP_FlexyStepper::setAutoDisable(bool enable, unsigned long delayMs)
+{
+  _autoDisable = enable;
+  _autoDisableDelay = delayMs;
+  if (enable)
+  {
+    _lastActiveTime = millis();
+  }
+}
+
 /**
  * set the current position as the home position (Step count = 0)
  */
 void ESP_FlexyStepper::setCurrentPositionAsHomeAndStop()
 {
+  xSemaphoreTake(_stateMutex, portMAX_DELAY);
   this->isOnWayToHome = false;
   this->currentStepPeriod_InUS = 0.0;
   this->nextStepPeriod_InUS = 0.0;
@@ -892,6 +943,7 @@ void ESP_FlexyStepper::setCurrentPositionAsHomeAndStop()
   this->currentPosition_InSteps = 0;
   this->targetPosition_InSteps = 0;
   this->isCurrentlyHomed = true;
+  xSemaphoreGive(_stateMutex);
 }
 
 /**
@@ -1049,7 +1101,11 @@ bool ESP_FlexyStepper::moveToHomeInSteps(signed char directionTowardHome,
       this->_limitTriggeredCallback();
     }
   }
-  delay(25);
+  unsigned long t = millis();
+  while (millis() - t < 25)
+  {
+    processMovement();
+  }
 
   //
   // the switch has been detected, now move away from the switch
@@ -1066,7 +1122,11 @@ bool ESP_FlexyStepper::moveToHomeInSteps(signed char directionTowardHome,
       break;
     }
   }
-  delay(25);
+  t = millis();
+  while (millis() - t < 25)
+  {
+    processMovement();
+  }
 
   //
   // check if switch never detected
@@ -1089,7 +1149,11 @@ bool ESP_FlexyStepper::moveToHomeInSteps(signed char directionTowardHome,
       break;
     }
   }
-  delay(25);
+  t = millis();
+  while (millis() - t < 25)
+  {
+    processMovement();
+  }
 
   //
   // check if switch never detected
@@ -1134,7 +1198,7 @@ void ESP_FlexyStepper::moveRelativeInSteps(long distanceToMoveInSteps)
 //
 void ESP_FlexyStepper::setTargetPositionRelativeInSteps(long distanceToMoveInSteps)
 {
-  setTargetPositionInSteps(currentPosition_InSteps + distanceToMoveInSteps);
+  setTargetPositionInSteps(getCurrentPositionInSteps() + distanceToMoveInSteps);
 }
 
 //
@@ -1161,13 +1225,18 @@ void ESP_FlexyStepper::setTargetPositionInSteps(long absolutePositionToMoveToInS
   // abort potentially running homing movement
   this->isOnWayToHome = false;
   this->isOnWayToLimit = false;
+  xSemaphoreTake(_stateMutex, portMAX_DELAY);
   targetPosition_InSteps = absolutePositionToMoveToInSteps;
   this->firstProcessingAfterTargetReached = true;
+  xSemaphoreGive(_stateMutex);
 }
 
 long ESP_FlexyStepper::getTargetPositionInSteps()
 {
-  return targetPosition_InSteps;
+  xSemaphoreTake(_stateMutex, portMAX_DELAY);
+  long t = targetPosition_InSteps;
+  xSemaphoreGive(_stateMutex);
+  return t;
 }
 
 //
@@ -1181,25 +1250,22 @@ void ESP_FlexyStepper::setTargetPositionToStop()
   // abort potentially running homing movement
   this->isOnWayToHome = false;
   this->isOnWayToLimit = false;
-
+  xSemaphoreTake(_stateMutex, portMAX_DELAY);
   if (directionOfMotion == 0)
   {
+    xSemaphoreGive(_stateMutex);
     return;
   }
 
   long decelerationDistance_InSteps;
-
-  //
-  // move the target position so that the motor will begin deceleration now
-  //
   decelerationDistance_InSteps = (long)round(
       5E11 / (deceleration_InStepsPerSecondPerSecond * currentStepPeriod_InUS *
               currentStepPeriod_InUS));
-
-  if (directionOfMotion > 0)
-    setTargetPositionInSteps(currentPosition_InSteps + decelerationDistance_InSteps);
-  else
-    setTargetPositionInSteps(currentPosition_InSteps - decelerationDistance_InSteps);
+  long newTarget = (directionOfMotion > 0)
+                       ? currentPosition_InSteps + decelerationDistance_InSteps
+                       : currentPosition_InSteps - decelerationDistance_InSteps;
+  xSemaphoreGive(_stateMutex);
+  setTargetPositionInSteps(newTarget);
 }
 
 //
@@ -1208,6 +1274,7 @@ void ESP_FlexyStepper::setTargetPositionToStop()
 //
 bool ESP_FlexyStepper::processMovement(void)
 {
+  xSemaphoreTake(_stateMutex, portMAX_DELAY);
   if (emergencyStopActive)
   {
     // abort potentially running homing movement
@@ -1229,10 +1296,15 @@ bool ESP_FlexyStepper::processMovement(void)
     {
       emergencyStopActive = false;
     }
+    xSemaphoreGive(_stateMutex);
     return (true);
   }
 
   // check if delayed brake shall be engaged / released
+  if (_autoDisable && directionOfMotion == 0 && _isDriverEnabled && (millis() - _lastActiveTime) >= _autoDisableDelay)
+  {
+    disableDriver();
+  }
   if (this->_timeToEngangeBrake != LONG_MAX && this->_timeToEngangeBrake <= millis())
   {
     this->activateBrake();
@@ -1284,13 +1356,16 @@ bool ESP_FlexyStepper::processMovement(void)
 
         if (this->_homeReachedCallback != NULL)
         {
+          xSemaphoreGive(_stateMutex);
           this->_homeReachedCallback();
+          return true;
         }
         // activate brake (or schedule activation) since we reached the final position
         if (this->_isBrakeConfigured && !this->_isBrakeActive)
         {
           this->triggerBrakeIfNeededOrSetTimeout();
         }
+        xSemaphoreGive(_stateMutex);
         return true;
       }
     }
@@ -1310,6 +1385,7 @@ bool ESP_FlexyStepper::processMovement(void)
       {
         this->triggerBrakeIfNeededOrSetTimeout();
       }
+      xSemaphoreGive(_stateMutex);
       return true;
     }
   }
@@ -1331,6 +1407,11 @@ bool ESP_FlexyStepper::processMovement(void)
       nextStepPeriod_InUS = periodOfSlowestStep_InUS;
       lastStepTime_InUS = micros();
       lastStepDirectionBeforeLimitSwitchTrigger = directionOfMotion;
+      if (_autoDisable && !_isDriverEnabled)
+      {
+        enableDriver();
+      }
+      xSemaphoreGive(_stateMutex);
       return (false);
     }
 
@@ -1342,6 +1423,11 @@ bool ESP_FlexyStepper::processMovement(void)
       nextStepPeriod_InUS = periodOfSlowestStep_InUS;
       lastStepTime_InUS = micros();
       lastStepDirectionBeforeLimitSwitchTrigger = directionOfMotion;
+      if (_autoDisable && !_isDriverEnabled)
+      {
+        enableDriver();
+      }
+      xSemaphoreGive(_stateMutex);
       return (false);
     }
     else
@@ -1353,7 +1439,9 @@ bool ESP_FlexyStepper::processMovement(void)
         firstProcessingAfterTargetReached = false;
         if (this->_targetPositionReachedCallback)
         {
+          xSemaphoreGive(_stateMutex);
           this->_targetPositionReachedCallback(currentPosition_InSteps);
+          return true;
         }
       }
 
@@ -1362,6 +1450,7 @@ bool ESP_FlexyStepper::processMovement(void)
       {
         this->triggerBrakeIfNeededOrSetTimeout();
       }
+      xSemaphoreGive(_stateMutex);
       return (true);
     }
   }
@@ -1372,7 +1461,10 @@ bool ESP_FlexyStepper::processMovement(void)
   periodSinceLastStep_InUS = currentTime_InUS - lastStepTime_InUS;
   // if it is not time for the next step, return
   if (periodSinceLastStep_InUS < (unsigned long)nextStepPeriod_InUS)
+  {
+    xSemaphoreGive(_stateMutex);
     return (false);
+  }
 
   // we have to move, so deactivate brake (if configured at all) immediately
   if (this->_isBrakeConfigured && this->_isBrakeActive)
@@ -1386,6 +1478,10 @@ bool ESP_FlexyStepper::processMovement(void)
 
   // update the current position and speed
   currentPosition_InSteps += directionOfMotion;
+  if (_autoDisable)
+  {
+    _lastActiveTime = millis();
+  }
   currentStepPeriod_InUS = nextStepPeriod_InUS;
 
   // remember the time that this step occured
@@ -1415,7 +1511,9 @@ bool ESP_FlexyStepper::processMovement(void)
         firstProcessingAfterTargetReached = false;
         if (this->_targetPositionReachedCallback)
         {
+          xSemaphoreGive(_stateMutex);
           this->_targetPositionReachedCallback(currentPosition_InSteps);
+          return true;
         }
         // activate brake since we reached the final position
         if (this->_isBrakeConfigured && !this->_isBrakeActive)
@@ -1423,9 +1521,15 @@ bool ESP_FlexyStepper::processMovement(void)
           this->triggerBrakeIfNeededOrSetTimeout();
         }
       }
+      if (_autoDisable && _isDriverEnabled)
+      {
+        _lastActiveTime = millis();
+      }
+      xSemaphoreGive(_stateMutex);
       return (true);
     }
   }
+  xSemaphoreGive(_stateMutex);
   return (false);
 }
 
