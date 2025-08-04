@@ -158,9 +158,9 @@ public:
   void moveRelativeInMillimeters(float distanceToMoveInMillimeters);
   void moveRelativeInRevolutions(float distanceToMoveInRevolutions);
 
-  bool moveToHomeInSteps(signed char directionTowardHome, float speedInStepsPerSecond, long maxDistanceToMoveInSteps, int homeSwitchPin);
-  bool moveToHomeInMillimeters(signed char directionTowardHome, float speedInMillimetersPerSecond, long maxDistanceToMoveInMillimeters, int homeLimitSwitchPin);
-  bool moveToHomeInRevolutions(signed char directionTowardHome, float speedInRevolutionsPerSecond, long maxDistanceToMoveInRevolutions, int homeLimitSwitchPin);
+  bool moveToHomeInSteps(signed char directionTowardHome, float speedInStepsPerSecond, long maxDistanceToMoveInSteps, int homeSwitchPin, callbackFunction homeReachedCallback = NULL);
+  bool moveToHomeInMillimeters(signed char directionTowardHome, float speedInMillimetersPerSecond, long maxDistanceToMoveInMillimeters, int homeLimitSwitchPin, callbackFunction homeReachedCallback = NULL);
+  bool moveToHomeInRevolutions(signed char directionTowardHome, float speedInRevolutionsPerSecond, long maxDistanceToMoveInRevolutions, int homeLimitSwitchPin, callbackFunction homeReachedCallback = NULL);
 
   static const signed char LIMIT_SWITCH_BEGIN = -1;  // interruptor al inicio
   static const signed char LIMIT_SWITCH_END = 1;     // interruptor al final
@@ -227,6 +227,24 @@ private:
   bool limitSwitchCheckPeformed;
   // 0 si el motor puede moverse en ambas direcciones, en otro caso indica la dirección prohibida
   signed char disallowedDirection;
+
+  // estado para el proceso de homing no bloqueante
+  enum HomingState : uint8_t
+  {
+    HOMING_IDLE = 0,
+    HOMING_MOVE_TO_SWITCH,
+    HOMING_WAIT_BEFORE_BACKOFF,
+    HOMING_MOVE_OFF_SWITCH,
+    HOMING_WAIT_BEFORE_FINAL,
+    HOMING_FINAL_APPROACH
+  };
+  HomingState _homingState = HOMING_IDLE;
+  unsigned long _homingStateStartTime = 0;
+  float _homingOriginalSpeed = 0;
+  float _homingSearchSpeed = 0;
+  long _homingMaxDistance = 0;
+  int _homingSwitchPin = -1;
+  signed char _homingDirection = 0;
 
   // protección de variables compartidas
   SemaphoreHandle_t _stateMutex;
