@@ -539,12 +539,12 @@ void ESP_FlexyStepper::setDecelerationInMillimetersPerSecondPerSecond(
 //
 bool ESP_FlexyStepper::moveToHomeInMillimeters(signed char directionTowardHome,
                                                float speedInMillimetersPerSecond, long maxDistanceToMoveInMillimeters,
-                                               int homeLimitSwitchPin)
+                                               int homeLimitSwitchPin, callbackFunction homeReachedCallback)
 {
   return (moveToHomeInSteps(directionTowardHome,
                             speedInMillimetersPerSecond * stepsPerMillimeter,
                             maxDistanceToMoveInMillimeters * stepsPerMillimeter,
-                            homeLimitSwitchPin));
+                            homeLimitSwitchPin, homeReachedCallback));
 }
 
 //
@@ -741,12 +741,12 @@ void ESP_FlexyStepper::setDecelerationInRevolutionsPerSecondPerSecond(
 //
 bool ESP_FlexyStepper::moveToHomeInRevolutions(signed char directionTowardHome,
                                                float speedInRevolutionsPerSecond, long maxDistanceToMoveInRevolutions,
-                                               int homeLimitSwitchPin)
+                                               int homeLimitSwitchPin, callbackFunction homeReachedCallback)
 {
   return (moveToHomeInSteps(directionTowardHome,
                             speedInRevolutionsPerSecond * stepsPerRevolution,
                             maxDistanceToMoveInRevolutions * stepsPerRevolution,
-                            homeLimitSwitchPin));
+                            homeLimitSwitchPin, homeReachedCallback));
 }
 
 //
@@ -936,6 +936,7 @@ void ESP_FlexyStepper::setAutoDisable(bool enable, unsigned long delayMs)
 void ESP_FlexyStepper::setCurrentPositionAsHomeAndStop()
 {
   xSemaphoreTake(_stateMutex, portMAX_DELAY);
+  this->_homingState = HOMING_IDLE;
   this->isOnWayToHome = false;
   this->currentStepPeriod_InUS = 0.0;
   this->nextStepPeriod_InUS = 0.0;
@@ -957,6 +958,7 @@ void ESP_FlexyStepper::goToLimitAndSetAsHome(callbackFunction callbackFunctionFo
   {
     this->_homeReachedCallback = callbackFunctionForHome;
   }
+  this->_homingState = HOMING_IDLE;
   // the second check basically utilizes the fact the the begin and end limit switch id is 1 respectively -1 so the values are the same as the direction of the movement when the steppers moves towards of of the limits
   if (this->activeLimitSwitch == 0 || this->activeLimitSwitch != this->directionTowardsHome)
   {
@@ -971,6 +973,8 @@ void ESP_FlexyStepper::goToLimit(signed char direction, callbackFunction callbac
   {
     this->_callbackFunctionForGoToLimit = callbackFunctionForLimit;
   }
+
+  this->_homingState = HOMING_IDLE;
 
   if (this->activeLimitSwitch == 0)
   {
@@ -1054,126 +1058,28 @@ void ESP_FlexyStepper::stopJogging()
 //
 bool ESP_FlexyStepper::moveToHomeInSteps(signed char directionTowardHome,
                                          float speedInStepsPerSecond, long maxDistanceToMoveInSteps,
-                                         int homeLimitSwitchPin)
+                                         int homeLimitSwitchPin, callbackFunction homeReachedCallback)
 {
-  float originalDesiredSpeed_InStepsPerSecond;
-  bool limitSwitchFlag;
+  if (homeReachedCallback)
+  {
+    this->_homeReachedCallback = homeReachedCallback;
+  }
 
-  //
-  // setup the home switch input pin
-  //
   pinMode(homeLimitSwitchPin, INPUT_PULLUP);
 
-  //
-  // remember the current speed setting
-  //
-  originalDesiredSpeed_InStepsPerSecond = desiredSpeed_InStepsPerSecond;
+  _homingSwitchPin = homeLimitSwitchPin;
+  _homingDirection = directionTowardHome;
+  _homingMaxDistance = maxDistanceToMoveInSteps;
+  _homingOriginalSpeed = desiredSpeed_InStepsPerSecond;
+  _homingSearchSpeed = speedInStepsPerSecond;
 
-  //
-  // if the home switch is not already set, move toward it
-  //
-  if (digitalRead(homeLimitSwitchPin) == HIGH)
-  {
-    //
-    // move toward the home switch
-    //
-    setSpeedInStepsPerSecond(speedInStepsPerSecond);
-    setTargetPositionRelativeInSteps(maxDistanceToMoveInSteps * directionTowardHome);
-    limitSwitchFlag = false;
-    while (!processMovement())
-    {
-      if (digitalRead(homeLimitSwitchPin) == LOW)
-      {
-        limitSwitchFlag = true;
-        directionOfMotion = 0;
-        break;
-      }
-    }
-
-    //
-    // check if switch never detected
-    //
-    if (limitSwitchFlag == false)
-      return (false);
-
-    if (this->_limitTriggeredCallback)
-    {
-      this->_limitTriggeredCallback();
-    }
-  }
-  unsigned long t = millis();
-  while (millis() - t < 25)
-  {
-    processMovement();
-  }
-
-  //
-  // the switch has been detected, now move away from the switch
-  //
-  setTargetPositionRelativeInSteps(maxDistanceToMoveInSteps *
-                                   directionTowardHome * -1);
-  limitSwitchFlag = false;
-  while (!processMovement())
-  {
-    if (digitalRead(homeLimitSwitchPin) == HIGH)
-    {
-      limitSwitchFlag = true;
-      directionOfMotion = 0;
-      break;
-    }
-  }
-  t = millis();
-  while (millis() - t < 25)
-  {
-    processMovement();
-  }
-
-  //
-  // check if switch never detected
-  //
-  if (limitSwitchFlag == false)
-    return (false);
-
-  //
-  // have now moved off the switch, move toward it again but slower
-  //
-  setSpeedInStepsPerSecond(speedInStepsPerSecond / 8);
+  setSpeedInStepsPerSecond(speedInStepsPerSecond);
   setTargetPositionRelativeInSteps(maxDistanceToMoveInSteps * directionTowardHome);
-  limitSwitchFlag = false;
-  while (!processMovement())
-  {
-    if (digitalRead(homeLimitSwitchPin) == LOW)
-    {
-      limitSwitchFlag = true;
-      directionOfMotion = 0;
-      break;
-    }
-  }
-  t = millis();
-  while (millis() - t < 25)
-  {
-    processMovement();
-  }
 
-  //
-  // check if switch never detected
-  //
-  if (limitSwitchFlag == false)
-    return (false);
+  _homingState = HOMING_MOVE_TO_SWITCH;
+  _homingStateStartTime = 0;
 
-  //
-  // successfully homed, set the current position to 0
-  //
-  setCurrentPositionInSteps(0L);
-
-  setTargetPositionInSteps(0L);
-  this->isCurrentlyHomed = true;
-  this->disallowedDirection = directionTowardHome;
-  //
-  // restore original velocity
-  //
-  setSpeedInStepsPerSecond(originalDesiredSpeed_InStepsPerSecond);
-  return (true);
+  return true;
 }
 
 //
@@ -1225,6 +1131,7 @@ void ESP_FlexyStepper::setTargetPositionInSteps(long absolutePositionToMoveToInS
   // abort potentially running homing movement
   this->isOnWayToHome = false;
   this->isOnWayToLimit = false;
+  this->_homingState = HOMING_IDLE;
   xSemaphoreTake(_stateMutex, portMAX_DELAY);
   targetPosition_InSteps = absolutePositionToMoveToInSteps;
   this->firstProcessingAfterTargetReached = true;
@@ -1250,6 +1157,7 @@ void ESP_FlexyStepper::setTargetPositionToStop()
   // abort potentially running homing movement
   this->isOnWayToHome = false;
   this->isOnWayToLimit = false;
+  this->_homingState = HOMING_IDLE;
   xSemaphoreTake(_stateMutex, portMAX_DELAY);
   if (directionOfMotion == 0)
   {
@@ -1280,6 +1188,7 @@ bool ESP_FlexyStepper::processMovement(void)
     // abort potentially running homing movement
     this->isOnWayToHome = false;
     this->isOnWayToLimit = false;
+    this->_homingState = HOMING_IDLE;
 
     currentStepPeriod_InUS = 0.0;
     nextStepPeriod_InUS = 0.0;
@@ -1387,6 +1296,76 @@ bool ESP_FlexyStepper::processMovement(void)
       }
       xSemaphoreGive(_stateMutex);
       return true;
+    }
+  }
+
+  // handle non-blocking homing initiated by moveToHomeInSteps()
+  if (_homingState != HOMING_IDLE)
+  {
+    switch (_homingState)
+    {
+    case HOMING_MOVE_TO_SWITCH:
+      if (digitalRead(_homingSwitchPin) == LOW)
+      {
+        currentStepPeriod_InUS = 0.0;
+        nextStepPeriod_InUS = 0.0;
+        directionOfMotion = 0;
+        targetPosition_InSteps = currentPosition_InSteps;
+        firstProcessingAfterTargetReached = true;
+        _homingStateStartTime = millis();
+        _homingState = HOMING_WAIT_BEFORE_BACKOFF;
+      }
+      break;
+    case HOMING_WAIT_BEFORE_BACKOFF:
+      if (millis() - _homingStateStartTime >= 25)
+      {
+        targetPosition_InSteps = currentPosition_InSteps + (_homingMaxDistance * _homingDirection * -1);
+        firstProcessingAfterTargetReached = true;
+        _homingState = HOMING_MOVE_OFF_SWITCH;
+      }
+      break;
+    case HOMING_MOVE_OFF_SWITCH:
+      if (digitalRead(_homingSwitchPin) == HIGH)
+      {
+        currentStepPeriod_InUS = 0.0;
+        nextStepPeriod_InUS = 0.0;
+        directionOfMotion = 0;
+        targetPosition_InSteps = currentPosition_InSteps;
+        firstProcessingAfterTargetReached = true;
+        _homingStateStartTime = millis();
+        _homingState = HOMING_WAIT_BEFORE_FINAL;
+      }
+      break;
+    case HOMING_WAIT_BEFORE_FINAL:
+      if (millis() - _homingStateStartTime >= 25)
+      {
+        setSpeedInStepsPerSecond(_homingSearchSpeed / 8);
+        targetPosition_InSteps = currentPosition_InSteps + (_homingMaxDistance * _homingDirection);
+        firstProcessingAfterTargetReached = true;
+        _homingState = HOMING_FINAL_APPROACH;
+      }
+      break;
+    case HOMING_FINAL_APPROACH:
+      if (digitalRead(_homingSwitchPin) == LOW)
+      {
+        currentStepPeriod_InUS = 0.0;
+        nextStepPeriod_InUS = 0.0;
+        directionOfMotion = 0;
+        currentPosition_InSteps = 0;
+        targetPosition_InSteps = 0;
+        isCurrentlyHomed = true;
+        disallowedDirection = _homingDirection;
+        setSpeedInStepsPerSecond(_homingOriginalSpeed);
+        _homingState = HOMING_IDLE;
+        if (this->_homeReachedCallback)
+        {
+          callbackFunction cb = this->_homeReachedCallback;
+          xSemaphoreGive(_stateMutex);
+          cb();
+          return true;
+        }
+      }
+      break;
     }
   }
 
