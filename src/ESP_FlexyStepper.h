@@ -47,7 +47,7 @@
 #include <Arduino.h>
 #include <stdlib.h>
 #include <freertos/FreeRTOS.h>
-#include <freertos/semphr.h>
+#include <driver/gpio.h>
 
 typedef void (*callbackFunction)(void);
 typedef void (*positionCallbackFunction)(long);
@@ -245,9 +245,6 @@ private:
   long _homingMaxDistance = 0;
   int _homingSwitchPin = -1;
   signed char _homingDirection = 0;
-
-  // protección de variables compartidas
-  SemaphoreHandle_t _stateMutex;
 
   // soporte para movimiento continuo
   bool _continuousMovement = false;
